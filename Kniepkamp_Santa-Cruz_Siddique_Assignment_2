@@ -1,0 +1,311 @@
+---
+title: 'Advanced R for Econometricians -- Assignment 2 '
+date: '2022-07-03'
+output:
+  pdf_document: default
+  html_document: default
+always_allow_html: true
+---
+
+Tom Kniepkamp; 229134,
+Camilo Santa- Cruz; 235633,
+Sk Tanzer Ahmed Siddique; 230764. 
+
+<div style="text-align: justify">
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+pacman::p_load(dplyr, profvis, bench)
+```
+
+
+Make a function for the log- likelihood function of the negative binomial distribution. 
+
+\begin{align}
+- \log L(\pi;, x) = - \sum_{i = 1}^{n} \underbrace{[\log \underbrace{\begin{pmatrix}x_i + k -1 \\ x_i \end{pmatrix}}_{\text{nCr}}
++ k \log(\pi) + x_i \log(1- \pi)]}_{\text{Y}}
+\end{align}
+
+
+ Note: since "pi" is pre- defined as a constant in R, we will use "p" instead.
+
+###  (a) 
+
+*Implement $(1)$ as an R function $lprob_nbinomial()$. Which step of your function is the most computationally demanding?*
+
+```{r}
+# Define log- likelihood function
+lprob_binomial <- function(p, x, k){
+  # number of combinations
+  nCr <- function(n , r){
+    return(factorial(n) / (factorial(n - r) * factorial(r)))
+  }
+  # computation inside the brackets of the log- likelihood function
+  Y <- function(x_i){
+    n <- x_i + k - 1
+    r <- x_i
+    return( log( nCr(n, r)) + k * log(p) + x_i * log(1 - p))
+  }
+  y <- sapply(x, Y)
+  return(sum(y) * -1)
+}
+
+set.seed(123)
+x1 <- rnbinom(n = 1e3, size = 10, prob = .3)
+
+lprob_binomial(0.3, x1, 10)
+
+
+```
+
+### Profiling 
+```{r}
+
+profvis({
+  # Define log- likelihood function
+lprob_binomial <- function(p, x, k){
+  # number of combinations
+  nCr <- function(n , r){
+    return(factorial(n) / (factorial(n - r) * factorial(r)))
+  }
+  # computation inside the brackets of the log- likelihood function
+  Y <- function(x_i){
+    n <- x_i + k - 1
+    r <- x_i
+    return( log( nCr(n, r)) + k * log(p) + x_i * log(1 - p))
+  }
+  y <- sapply(x, Y)
+  return(sum(y) * -1)
+}
+
+set.seed(123)
+x1 <- rnbinom(n = 1e3, size = 10, prob = .3)
+
+lprob_binomial(0.3, x1, 10)
+})
+```
+
+
+After profiling, we have observed that most of the time is spent in the lprob_nbinomial() call which takes in line 21 is the most demanding computation. On the other hand lapply calculation was a way faster which takes only 10ms and the memory consumed only 0.2 MB. 
+
+```{r}
+lprob_binomial(0.3, x1, 10)
+
+(bn_1 <- bench::mark(
+  lprob_binomial(0.3, x1, 10)
+  )
+)
+
+```
+
+
+### (b) 
+
+Environments exist in an hierarchichal manner. Function and variables defined within a function, 
+do not exist outside this environment, for example, in a), we have defined the functions $nCr$ and $Y$ to compute the number of combinations and the computations inside the brackets respectively. These functions will not be defined in the main environment, but can still be used within the context of lprob_binomial. 
+
+Also inside the environment of that function, the function parameters p, x and k are considered constants in the sub- function Y as well. This has the advantage that p and k can be used inside of Y, without being declared as arguments in the function definition. However, these differ again from global variables in a way that they only exist within the environment of lprob_binomial, but are not in the main environment and can thus be changed by the user in every function call. 
+
+### (c)
+
+*Implement a function factory ll_nbinomial() which manufactures negative binomial log-likelihood functions that perform log-likelihood computation as implemented in your solution to (a) in an efficient manner. The manufactured function should only take pi as an argument. Elaborate on your approach.
+
+
+```{r}
+
+ll_binomial <- function(x, k){
+  # number of combinations
+  nCr <- function(n , r){
+    return(factorial(n) / (factorial(n - r) * factorial(r)))
+  }
+  
+  Y <- function(x_i, p){ # computations inside the brackets
+    n <- x_i + k - 1
+    r <- x_i
+    return( log( nCr(n, r)) + k * log(p) + x_i * log(1 - p))
+  }
+  
+  LogLik <- function(p){
+    y <- sapply(x, Y, p = p) # loop through possible values of pi
+    return(sum(y) * -1) # return the negative log- likelihood function
+  }
+  return(LogLik)
+}
+
+```
+
+We are using the function from a), but instead of returning the output of a log- likelihood function of a specific value of pi, we return a LogLik function that takes on a vector of possible values of pi, which helps us in later steps to determine the Maximum Likelihood Estimator (MLE) by minimising outputs. 
+
+Due to the hierarchical nature of environments the values for the dataset x and the parameter k are pre- defined and do not need to be defined again in the manufactured function Loglik. This leaves pi to be the only parameter that needs to added to the function call. 
+
+
+### (d) 
+
+*Test your function factory using pseudo-random numbers x1 generated as follows.*
+
+```{r}
+
+set.seed(123)
+x1 <- rnbinom(n = 1e3, size = 10, prob = .3) # set the data 
+
+# create the manufactured function with the data and k
+built_func  <- ll_binomial(x1, k = 10)
+built_func
+
+# test the function with a few values of pi
+p <- seq(0, 1, 0.01)
+
+# plot the values of the likelihood functions
+plot(sapply(p, built_func), type = "l")
+
+```
+
+
+### (e) 
+
+*Implement a function nbin_mle() that obtains the MLE of $\pi$ by optimising the manufactured negative binomial log-likelihood. nbin_mle() should return a named list with entries*
+
+- data : the data used for estimating the model
+
+- n : the number of observations in data
+
+- distr : the name of the distribution
+
+- par : the name of the parameter to be estimated
+
+- ll : the manufactured log-likelihood function ll_nbinomial()
+
+- MLE : the MLE of the parameter                               
+
+```{r}
+
+nbin_mle <- function(x, k){
+  p <- seq(0, 1, 0.01) # vector of values for pi
+  buit_func <- ll_binomial(x, k) # manufactured function
+  estimates <- sapply(p, built_func) # likelihood estimates
+  i         <- which.min(estimates) # index of MLE
+  pi_hat    <- p[i] #MLE 
+  return(list(data = x, n = length(data), distr = "Binomial", par = "pi", ll = built_func, pi_hat ))
+}
+
+# test the function  
+nbin_mle(x1,  10)
+
+```
+
+
+
+### (f) 
+
+Implement a summary method for the output of nbin_mle() within the S3 framework. Proceed as follows:
+
+- add a class my_mle to output objects returned by nbin_mle() in your solution to (c) by modifying nbin_mle accordingly.
+
+- write a method summary.my_mle() that summarises objects of class my_mle. The method should extend objects of class my_mle and return a list of class summary.my_mle. This list should additionally contain a simple statistical summary of data as well as a tibble with entries prob (a sequence of probabilities between 0 and 1) and ll (the log-likelihood evalutated for prob)
+
+
+```{r}
+nbin_mle <- function(x, k){
+  p <- seq(0, 1, 0.01)
+  buit_func <- ll_binomial(x, k)
+  ll <- sapply(p, built_func)
+  i         <- which.min(ll)
+  pi_hat    <- p[i]
+  output <- list(data = x, n = length(data), distr = "Negative Binomial", par = "pi", ll = built_func, MLE = pi_hat)
+  class(output) <- "my_mle" # set class
+  
+  return(output)
+}
+
+
+
+output <- nbin_mle(x1, 10) # get output
+
+my_mle <- function(object){
+  UseMethod("my_mle")
+}
+
+
+# summary method
+summary.my_mle <- function(object){
+  prob      <- as.vector(seq(0, 1, 0.01)) # potential values for pi used in MLE
+  ll        <- sapply(prob, object$ll)    # log- likelihood data 
+  tib       <- tibble(prob, ll)           # tibble with probs and log likelihoods
+  mu        <- mean(object$data)          # mean of the data 
+  std       <- sd(object$data)            # standard deviation of the data 
+  quantiles <- quantile(object$data)      # quantiles of the data 
+  return(list(data = object$data,n = object$n, distr = object$distr,
+              par = object$par, ll =  object$ll,
+              MLE = object$MLE, tib = tib ,
+              mu = mu,std =  std, quantiles = quantiles))
+}
+q <- summary.my_mle(output)
+q
+```
+
+### (g) Implement a print() and a plot() method for objects of class summary.my_mle:
+
+• print.summary.my_mle() should provide the user with a text-based summary of the information in objects of class summary.my_mle that prints nicely to the console.
+
+• plot.summary.my_mle() should visualise the tibble containing the evaluated log-likelihood and also mark the MLE in this plot. The result should be similar to the plot below.
+
+
+```{r}
+# create a print method
+
+print.summary.my_mle <- function(object){
+  object <- summary.my_mle(object)
+  
+  cat("\n ##########################\n")
+  cat(" Information on the dataset and MLE:")
+  cat("\n ##########################\n")
+  cat("\n Dataset used:\n ", object$data, "\n")
+  cat("\n Number of observations: ", object$n, "\n")
+  cat("\n Type of distribution: ", object$distr, "\n")
+  cat("\n Parameter to be estimated: ", object$par, "\n")
+  cat("\n log- likelihood function generated:\n")
+  
+  object$ll
+  
+  cat("\n Maximum- Likelihood Estimator: ", object$MLE, "\n")
+  cat("\n Head of tibble of potential probabilities with their negative log- likelihood functions:")
+  cat("(shown as tbl_df)")
+  
+  print(head(object$tib))
+  
+  cat("\n ##########################\n")
+  cat(" Descriptive statistics:")
+  cat("\n ##########################\n")
+  cat("\n Mean = ", object$mu, "\n")
+  cat("\n Standard Deviation = ", object$std, "\n")
+  cat("\n Quantiles: \n")
+  
+  object$quantiles
+  
+}
+```
+
+```{r}
+# create a plot method
+
+plot.summary.my_mle <- function(object){
+  object <- summary.my_mle(object)
+  plot(object$tib$prob, object$tib$ll, type = "l",
+       ylab = "-log L(pi; x , k = 10)", xlab = "pi")
+  abline(v = object$MLE, col = "red")
+}
+
+```
+
+
+### (h) Demonstrate your implementations in (g) using the example data from (d).
+
+```{r}
+print.summary.my_mle(output)
+plot.summary.my_mle(output)
+```
+
